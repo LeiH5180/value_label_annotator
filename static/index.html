@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Value Studio · 人工进度标注</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand"><span class="brand-mark">∿</span><div><strong>Value Studio</strong><small>CHUNK PROGRESS ANNOTATION</small></div></div>
+    <div class="header-meta"><span class="live-dot"></span> 本地数据 · 20 actions / chunk</div>
+    <button id="restore" class="button restore" disabled>↺ 还原本 episode</button>
+  </header>
+  <div class="workspace">
+    <aside class="sidebar">
+      <details id="datasetSettings" class="dataset-settings" open>
+      <summary class="section-label">01 / 数据集设置</summary>
+      <div class="dataset-fields">
+      <label for="datasetSelect">选择数据集</label>
+      <select id="datasetSelect"><option value="">选择本机数据集…</option></select>
+      <label for="datasetPath">或输入数据集绝对路径</label>
+      <input id="datasetPath" placeholder="/path/to/dataset" autocomplete="off">
+      <label for="labelSet">标签版本</label>
+      <select id="labelSet"><option value="">无已有标签 · 使用线性初值</option></select>
+      <button id="openDataset" class="button primary full">打开数据集 <span>↗</span></button>
+      </div>
+      </details>
+      <div id="datasetSummary" class="dataset-summary">选择数据集后开始标注</div>
+      <div class="section-label episode-heading">02 / EPISODES <span id="episodeCount">0</span></div>
+      <div id="reviewSummary" class="review-summary">已修改 0 / 0</div>
+      <input id="episodeSearch" placeholder="搜索 episode 编号" aria-label="搜索 episode">
+      <div class="filter-row">
+        <select id="categoryFilter" aria-label="筛选类别"><option value="all">全部类别</option><option value="success">success</option><option value="dagger">dagger</option><option value="failure">fail</option><option value="unknown">未分类</option></select>
+        <select id="labelFilter" aria-label="筛选标注状态"><option value="all">全部状态</option><option value="modified">已修改</option><option value="unmodified">未修改</option><option value="existing">已有标签</option><option value="missing">无标签</option></select>
+      </div>
+      <div id="episodeList" class="episode-list"><div class="list-empty">还没有打开数据集</div></div>
+      <div class="sidebar-footer">← → 切换 chunk <span>Ctrl / ⌘ + S 保存</span></div>
+    </aside>
+    <main>
+      <div id="emptyState" class="empty-state"><div class="empty-icon">∿</div><div class="eyebrow">VALUE ANNOTATION WORKSPACE</div><h1>让每一段动作都有进度</h1><p>打开数据集，查看三视角画面，<br>拖动曲线或输入数值，标注每个动作片段的进度。</p><div class="empty-steps"><span>01 选择 episode</span><span>02 调整进度点</span><span>03 保存标签</span></div></div>
+      <div id="editor" hidden>
+        <section class="episode-title">
+          <div><div class="eyebrow">EPISODE WORKSPACE</div><h1 id="episodeTitle">Episode 000000</h1><div id="episodeMeta" class="muted"></div></div>
+          <div class="episode-title-right"><span id="categoryBadge" class="badge"></span><span id="sourceBadge" class="source-badge"></span><div id="annotatedSummary" class="muted"></div></div>
+        </section>
+        <div class="annotation-layout">
+        <section class="video-section">
+          <div class="section-top"><h2>观察动作</h2><span id="actionInfo" class="mono muted"></span></div>
+          <div class="camera-grid">
+            <div class="camera"><div class="camera-caption"><span class="cam-dot"></span>固定相机 <span>BASE</span></div><div class="video-frame"><video id="video0" muted playsinline preload="auto"></video><div id="videoStatus0" class="video-status">等待加载</div></div></div>
+            <div class="camera"><div class="camera-caption"><span class="cam-dot"></span>左腕相机 <span>WRIST LEFT</span></div><div class="video-frame"><video id="video1" muted playsinline preload="auto"></video><div id="videoStatus1" class="video-status">等待加载</div></div></div>
+            <div class="camera"><div class="camera-caption"><span class="cam-dot"></span>右腕相机 <span>WRIST RIGHT</span></div><div class="video-frame"><video id="video2" muted playsinline preload="auto"></video><div id="videoStatus2" class="video-status">等待加载</div></div></div>
+          </div>
+          <div class="playbar">
+            <button id="play" class="play-button" title="播放 / 暂停" aria-label="播放" disabled>▶</button>
+            <button id="playChunk" class="button compact" disabled>播放此 chunk</button>
+            <input id="actionSeek" type="range" min="0" max="1" value="0" step="1" aria-label="选择 action">
+            <span id="timeInfo" class="mono">0.00 s</span>
+            <select id="speed" aria-label="播放速度"><option value="0.25">0.25×</option><option value="0.5">0.5×</option><option value="1" selected>1×</option><option value="2">2×</option></select>
+          </div>
+        </section>
+        <section class="curve-section">
+          <div class="section-top"><div><h2>进度曲线</h2><p class="section-hint">每个点是一个 chunk 的结束进度。拖动点或在右侧输入数值。</p></div><div class="legend"><span><i class="legend-line reference"></i>初始曲线</span><span><i class="legend-line current"></i>当前进度</span></div></div>
+          <div class="anchor-toolbar"><button id="toggleAnchor" class="button compact" aria-pressed="false" title="标记当前曲线点；也可在点上右键标记或取消">线性锚定</button><button id="interpolate" class="button compact" disabled title="保留锚点，按真实时间线性插值相邻锚点之间的点">线性插值</button><span id="anchorSummary" class="muted">右键曲线点可锚定 / 取消</span></div>
+          <div class="curve-and-editor">
+            <div class="chart-wrap"><canvas id="curve" aria-label="可拖动的 chunk 进度曲线"></canvas><div class="chart-caption"><span>TIME / 秒</span><span id="cursorInfo"></span></div><div class="curve-scrubber"><span>视频位置</span><input id="curveSeek" type="range" min="0" max="1" value="0" step="0.001" aria-label="曲线视频定位条"><span id="curveSeekTime" class="mono">0.00 s</span></div><p class="scrubber-hint">拖动定位条或曲线中的竖向游标，三路画面同步定位。播放中拖动，松开后继续播放。</p></div>
+          </div>
+        </section>
+            <section class="chunk-editor" aria-label="Chunk 数值编辑">
+              <div class="chunk-nav"><button id="prevChunk" title="前一个 chunk">←</button><span id="chunkTitle" class="mono">CHUNK 00</span><button id="nextChunk" title="后一个 chunk">→</button></div>
+              <div id="chunkRange" class="muted chunk-range"></div>
+              <div class="chunk-views" role="group" aria-label="切换 chunk 时的视频定位方式"><button id="viewStart" class="button compact" aria-pressed="true" title="切换 chunk 时保持显示起始 action">看起始 action</button><button id="viewEnd" class="button compact" aria-pressed="false" title="切换 chunk 时保持显示末尾 action">看末尾 action</button></div>
+              <label for="deltaInput" class="delta-label">Action chunk 增量 · 主要标注值</label>
+              <div class="progress-input-wrap delta-input-wrap"><input id="deltaInput" type="number" step="any" aria-label="当前 chunk 增量"><span>DELTA</span></div>
+              <label for="progressInput">结束进度</label>
+              <div class="progress-input-wrap"><input id="progressInput" type="number" step="any" aria-label="当前 chunk 结束进度"><span>PROGRESS</span></div>
+              <div class="episode-total"><span>Episode 总进度</span><strong id="totalProgress" class="mono">1.0000</strong></div>
+              <div class="chunk-numbers"><div><span>起点进度</span><b id="startProgress" class="mono"></b></div><div><span>当前增量</span><b id="chunkDelta" class="mono"></b></div><div><span>初始结束进度</span><b id="originalProgress" class="mono"></b></div></div>
+              <button id="resetPoint" class="button subtle full">恢复此点初值</button>
+              <button id="resetEpisode" class="button restore full">恢复整条初值…</button>
+              <p class="chunk-note">改结束进度：调整相邻增量。<br>改增量：平移后续进度，更新总进度。</p>
+            </section>
+        </div>
+        <div class="savebar"><div><span id="dirtyStatus" class="save-state">未修改</span><div id="saveDetails" class="muted"></div></div><button id="save" class="button primary save-button" disabled>保存并标记已修改 <span>⌘ / Ctrl + S</span></button></div>
+        <details class="chunks-details"><summary>查看所有 chunk 的数值 <span id="tableCount"></span></summary><div class="table-scroll"><table><thead><tr><th>CHUNK</th><th>ACTIONS</th><th>时间 / s</th><th>起点进度</th><th>结束进度</th><th>Δ 进度</th><th>状态</th></tr></thead><tbody id="chunkTable"></tbody></table></div></details>
+      </div>
+    </main>
+  </div>
+  <div id="toast" role="status" aria-live="polite" hidden></div>
+  <dialog id="restoreDialog"><div class="dialog-icon">↺</div><h2>恢复整条初值？</h2><p>将曲线和标签文件恢复到此轨迹的初始状态，撤回已经保存的修改，并将轨迹标记为“未修改”。之后可以重新编辑或直接保存。</p><div class="dialog-actions"><button id="cancelRestore" class="button">取消</button><button id="confirmRestore" class="button danger">确认恢复整条初值</button></div></dialog>
+  <script src="/app.js"></script>
+</body>
+</html>
