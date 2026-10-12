@@ -21,13 +21,13 @@ bash ~/value_label_annotator/run.sh --root /path/to/datasets --port 8003
 如果 VS Code 通过 Remote SSH 连接这台机器，在「端口」面板转发 8003，然后在本机浏览器访问转发地址。默认服务只监听 `127.0.0.1`。停止服务使用 Ctrl+C。
 
 
-
 ### 同一 Wi-Fi / 局域网访问
 
 先保存当前标注，在启动服务的终端按 Ctrl+C 停止旧服务，再指定监听所有 IPv4 网卡。将 `/path/to/datasets` 替换为服务器上的实际数据集目录：
 
 ```bash
-bash ~/value_label_annotator/run.sh --root /path/to/datasets --host 0.0.0.0 --port 8003
+bash ~/value_label_annotator/run.sh --root /mnt/data/haolei/2026-09-btin-datasets/2026-09-G1D01-dagger-boin-40mm/boltinsert_value_validate_datasets --host 0.0.0.0 --port 8003
+# bash ~/value_label_annotator/run.sh --root /path/to/datasets --host 0.0.0.0 --port 8003
 ```
 
 在服务器上执行 `hostname -I` 查看内网 IP。其他设备在浏览器打开 `http://服务器内网IP:8003`。例如，服务器内网 IP 为 `10.10.1.41` 时，访问 `http://10.10.1.41:8003`。IP 以服务器当前配置为准；`0.0.0.0` 是监听地址，不是浏览器访问地址。
@@ -35,6 +35,26 @@ bash ~/value_label_annotator/run.sh --root /path/to/datasets --host 0.0.0.0 --po
 访问设备需要能连通服务器，服务器防火墙需允许 TCP 8003 端口。同一 Wi-Fi 下的访客网络或设备隔离也可能阻止访问。如果服务运行在远程服务器上，应使用远程服务器的内网 IP，而非运行浏览器的电脑 IP。其他设备上的 `localhost` 和 `127.0.0.1` 指向设备自身。
 
 数据和视频保存在服务器上，网页中填写的数据集路径也是服务器路径。访问期间服务器和服务进程需要保持运行。
+
+### Mac 一键启动并共享给同一 Wi-Fi 用户
+
+如果 Mac 能通过 `ssh haolei@ch-pub-2` 连接服务器，但 Wi-Fi 内设备无法直接访问服务器 IP，可以让 Mac 作为共享入口。在 **Mac 终端**执行以下命令，下载并运行脚本：
+
+```bash
+curl -fL https://raw.githubusercontent.com/LeiH5180/value_label_annotator/main/start_mac.sh -o "$HOME/start_value_label_annotator.sh" && bash "$HOME/start_value_label_annotator.sh"
+```
+
+脚本使用 Mac 已有的 SSH 配置连接 `haolei@ch-pub-2`，复用服务器上已经运行的标注服务；如果服务未运行，则使用以下数据集目录启动服务：
+
+```text
+/mnt/data/haolei/2026-09-btin-datasets/2026-09-G1D01-dagger-boin-40mm/boltinsert_value_validate_datasets
+```
+
+脚本将 Mac 所有 IPv4 网卡的 `18003` 端口转发到服务器的 `127.0.0.1:8003`，并显示 Wi-Fi 访问网址。本机访问 `http://localhost:18003`，其他用户访问 `http://Mac的Wi-Fi-IP:18003`，无需各自连接 SSH。新启动的服务器服务仅监听回环地址；已有服务的监听配置保持不变。
+
+保持 Mac 联网、唤醒和终端运行。按 Ctrl+C 或关闭终端会停止共享，服务器服务继续运行；脚本启动的服务日志保存在服务器的 `~/value_label_annotator/.cache/shared-server.log`。停止该后台服务时，先保存标注，再在服务器使用 `ss -ltnp 'sport = :8003'` 找到进程 PID，并执行 `kill <PID>`。
+
+如果其他人无法访问，检查 Mac 防火墙是否允许 SSH 入站连接，以及 Wi-Fi 是否启用了访客隔离或设备隔离。如果本地端口被占用，可执行 `LOCAL_PORT=18004 bash "$HOME/start_value_label_annotator.sh"` 使用另一端口；连接目标可通过 `SSH_TARGET` 环境变量修改。需要更换默认数据集时，编辑下载脚本中的 `DATASET_ROOT`；复用已有服务时仍沿用已有服务的数据集配置。
 
 ### 检查服务状态
 
