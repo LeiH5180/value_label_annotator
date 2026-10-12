@@ -69,7 +69,7 @@ class StoreTests(unittest.TestCase):
         for value, expected in zip(e["points"], [0, .01, .22, .63]):
             self.assertAlmostEqual(value, expected)
 
-    def test_save_edits_original_deltas_and_restore_exact_bytes(self):
+    def test_restore_is_draft_until_explicit_save(self):
         sess = self.open(make_dataset(self.root))
         path = sess.manual_path(0)
         original = path.read_bytes()
@@ -93,10 +93,20 @@ class StoreTests(unittest.TestCase):
         manifest = json.loads((path.parent.parent / "manifest.json").read_text())
         self.assertEqual(manifest["value_checkpoint"], "keep")
         self.assertEqual(manifest["num_labeled_samples"], 43)
-        self.store.restore(sess, 0, {"revision": e["revision"]})
-        self.assertEqual(path.read_bytes(), original)
+        saved_bytes = path.read_bytes()
+        sidecars = {p: p.read_bytes() for p in path.parent.parent.glob("*.json")}
+        restored = self.store.restore(sess, 0, {"revision": e["revision"]})
+        self.assertEqual(restored["points"], e["baseline_points"])
+        self.assertEqual(restored["revision"], e["revision"])
+        self.assertTrue(restored["modified"])
+        self.assertEqual(path.read_bytes(), saved_bytes)
+        self.assertEqual({p: p.read_bytes() for p in sidecars}, sidecars)
+        self.assertEqual(self.store.episode(self.open(sess.path), 0)["points"], e["points"])
+        committed = self.store.save(sess, 0, {"revision": restored["revision"], "points": restored["points"], "annotated": restored["annotated"]})
+        self.assertEqual(committed["points"], e["baseline_points"])
+        self.assertTrue(pq.read_table(path)["value_delta"].equals(old["value_delta"]))
 
-    def test_missing_labels_linear_in_time_create_chunk_file_reopen_and_delete_on_restore(self):
+    def test_restore_missing_baseline_keeps_saved_labels_until_save(self):
         ds = make_dataset(self.root, labels=False)
         sess = self.open(ds)
         e = self.store.episode(sess, 0)
@@ -115,14 +125,21 @@ class StoreTests(unittest.TestCase):
         reopened = self.store.episode(self.open(ds), 0)
         self.assertEqual(reopened["points"], saved["points"])
         restored = self.store.restore(sess, 0, {"revision": saved["revision"]})
-        self.assertFalse(sess.manual_path(0).exists())
+        self.assertTrue(sess.manual_path(0).exists())
         self.assertEqual(restored["points"], e["points"])
+        self.assertEqual(self.store.episode(sess, 0)["points"], saved["points"])
+        self.assertFalse((sess.manual_path(0).parent.parent / ".annotation_initial").exists())
 
-    def test_snapshot_captured_before_first_visit_and_conflicts(self):
+    def test_snapshot_captured_on_first_episode_visit_and_conflicts(self):
         ds = make_dataset(self.root, episodes=2)
         a, b = self.open(ds), self.open(ds)
-        original = a.manual_path(1).read_bytes()
+        # Opening a dataset must not capture unvisited episode labels.
+        path = a.manual_path(1)
+        table = pq.read_table(path)
+        values = table["value_delta"].to_pylist(); values[0] = .12
+        pq.write_table(table.set_column(table.schema.get_field_index("value_delta"), "value_delta", pa.array(values)), path)
         e = self.store.episode(b, 1)
+        self.assertAlmostEqual(e["baseline_points"][1], .12)
         points = list(e["points"]); points[2] = .5
         saved = self.store.save(b, 1, {"revision": e["revision"], "points": points, "annotated": [False, True, False]})
         with self.assertRaises(APIError) as caught:
@@ -130,8 +147,13 @@ class StoreTests(unittest.TestCase):
         self.assertEqual(caught.exception.status, 409)
         first_visit = self.store.episode(a, 1)
         self.assertNotEqual(first_visit["points"], first_visit["baseline_points"])
-        self.store.restore(a, 1, {"revision": saved["revision"]})
-        self.assertEqual(a.manual_path(1).read_bytes(), original)
+        before = a.manual_path(1).read_bytes()
+        restored = self.store.restore(a, 1, {"revision": saved["revision"]})
+        self.assertEqual(restored["points"], e["points"])
+        self.assertEqual(a.manual_path(1).read_bytes(), before)
+        with self.assertRaises(APIError) as caught:
+            self.store.restore(a, 1, {"revision": e["revision"]})
+        self.assertEqual(caught.exception.status, 409)
 
     def test_save_without_numeric_changes_marks_modified_and_persists(self):
         ds = make_dataset(self.root)
@@ -154,9 +176,10 @@ class StoreTests(unittest.TestCase):
             self.assertTrue(current["modified"])
             self.assertEqual(current["annotated"], [True] * 3)
             restored = another.restore(reopened, 0, {"revision": current["revision"]})
-            self.assertFalse(restored["modified"])
-            self.assertEqual(reopened.manual_path(0).read_bytes(), original)
-            self.assertFalse(self.store.episode_list(sess)[0]["modified"])
+            self.assertTrue(restored["modified"])
+            self.assertEqual(restored["points"], current["points"])
+            self.assertEqual(restored["annotated"], current["annotated"])
+            self.assertTrue(self.store.episode_list(sess)[0]["modified"])
             again = another.save(reopened, 0, {"revision": restored["revision"], "points": restored["points"], "annotated": restored["annotated"]})
             self.assertTrue(again["modified"])
             self.assertEqual(again["annotated"], [True] * 3)
@@ -198,9 +221,30 @@ class StoreTests(unittest.TestCase):
         self.assertEqual(current["baseline_points"], initial["points"])
         self.assertEqual(current["points"], saved["points"])
         restored = self.store.restore(reopened, 0, {"revision": current["revision"]})
-        self.assertFalse(restored["modified"])
-        self.assertFalse(reopened.manual_path(0).exists())
+        self.assertTrue(restored["modified"])
+        self.assertTrue(reopened.manual_path(0).exists())
         self.assertEqual(restored["points"], initial["points"])
+        self.assertEqual(self.store.episode(reopened, 0)["points"], saved["points"])
+        # A new server run captures saved labels, ignoring legacy disk baselines.
+        marker = reopened.manual_path(0).parent.parent / ".annotation_initial/episode_000000.json"
+        marker.parent.mkdir(); marker.write_text('{"original_exists": false}')
+        another = Store(self.root, self.root / "restart-cache")
+        try:
+            new_session = another.session(another.open(str(ds))["session"])
+            current = another.episode(new_session, 0)
+            self.assertEqual(current["baseline_points"], saved["points"])
+            self.assertEqual(another.restore(new_session, 0, {"revision": current["revision"]})["points"], saved["points"])
+        finally:
+            another.pool.shutdown(wait=True)
+
+    def test_restore_unlabeled_episode_writes_nothing(self):
+        sess = self.open(make_dataset(self.root, labels=False))
+        initial = self.store.episode(sess, 0)
+        before = {p: p.read_bytes() for p in sess.path.rglob("*") if p.is_file()}
+        restored = self.store.restore(sess, 0, {"revision": initial["revision"]})
+        self.assertEqual(restored["points"], initial["points"])
+        self.assertEqual(restored["revision"], "missing")
+        self.assertEqual(before, {p: p.read_bytes() for p in sess.path.rglob("*") if p.is_file()})
 
     def test_bad_values_and_wrong_alignment_do_not_write(self):
         sess = self.open(make_dataset(self.root))

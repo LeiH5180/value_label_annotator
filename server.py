@@ -67,8 +67,7 @@ class Session:
     episodes: dict[int, dict]
     source_set: str | None
     opened_at: str
-    baseline: dict[int, bytes]
-    revisions: dict[int, str]
+    baseline: dict[int, bytes | None]
     cache: dict[int, dict] = field(default_factory=dict)
 
     def manual_path(self, ep: int) -> Path:
@@ -88,6 +87,7 @@ class Store:
         self.root = root.resolve()
         self.cache_dir = cache_dir.resolve()
         self.sessions: dict[str, Session] = {}
+        self.baselines: dict[Path, bytes | None] = {}
         self.lock = threading.RLock()
         self.video_jobs = {}
         self.pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="video")
@@ -143,26 +143,10 @@ class Store:
             if item["name"] == source_set and item["chunk_horizon"] not in (None, HORIZON):
                 raise APIError("所选模型标签的 action horizon 不是 20，不能用于此标注器。")
         episodes = {int(r["episode_index"]): r for r in rows}
-        # Capture selected label files NOW, rather than on the first episode visit.
         with self.lock:
-            baseline = {}
-            for f in (path / "value_labels" / (source_set or MANUAL_SET) / "episodes").glob("episode_*.parquet"):
-                ep = int(f.stem.rsplit("_", 1)[1])
-                if ep in episodes:
-                    baseline[ep] = f.read_bytes()
-            initial_dir = path / "value_labels" / (source_set or MANUAL_SET) / ".annotation_initial"
-            for marker in initial_dir.glob("episode_*.json"):
-                ep = int(marker.stem.rsplit("_", 1)[1])
-                if ep not in episodes:
-                    continue
-                saved_initial = json.loads(marker.read_text())
-                if saved_initial["original_exists"]:
-                    baseline[ep] = marker.with_suffix(".parquet").read_bytes()
-                else:
-                    baseline.pop(ep, None)
+            # Episode baselines are captured lazily and shared for this server run.
             sess = Session(secrets.token_urlsafe(24), path, info, episodes, source_set,
-                           datetime.now(timezone.utc).isoformat(), baseline,
-                           {ep: revision(baseline.get(ep)) for ep in episodes})
+                           datetime.now(timezone.utc).isoformat(), {})
             self.sessions[sess.token] = sess
         return {"session": sess.token, "dataset_name": path.name, "dataset_path": str(path),
                 "source_set": source_set, "label_path": str(path / "value_labels" / (source_set or MANUAL_SET)),
@@ -201,20 +185,14 @@ class Store:
         episodes[str(ep)] = {"modified": modified, "updated_at": datetime.now(timezone.utc).isoformat()}
         atomic_write(file, json.dumps({"schema_version": 1, "episodes": episodes}, ensure_ascii=False, indent=2).encode())
 
-    @staticmethod
-    def capture_initial(sess, ep):
-        """Retain the first annotation baseline across reopening and server restarts."""
-        marker = sess.manual_path(ep).parent.parent / ".annotation_initial" / f"episode_{ep:06d}.json"
-        if marker.exists():
-            return
-        raw = sess.baseline.get(ep)
-        if raw is not None:
-            atomic_write(marker.with_suffix(".parquet"), raw)
-        atomic_write(marker, json.dumps({"original_exists": raw is not None, "captured_at": sess.opened_at}).encode())
-
     def base_episode(self, sess, ep):
         if ep not in sess.episodes:
             raise APIError("Episode 不存在。", 404)
+        with self.lock:
+            path = sess.manual_path(ep)
+            if path not in self.baselines:
+                self.baselines[path] = read_bytes(path)
+            sess.baseline[ep] = self.baselines[path]
         if ep in sess.cache:
             return sess.cache[ep]
         data = pq.read_table(sess.data_path(ep), columns=["index", "episode_index", "frame_index", "timestamp"])
@@ -387,9 +365,7 @@ class Store:
             table = table.replace_schema_metadata(metadata)
             out = pa.BufferOutputStream()
             pq.write_table(table, out, compression="zstd")
-            self.capture_initial(sess, ep)
             atomic_write(path, out.getvalue().to_pybytes())
-            sess.revisions[ep] = revision(path.read_bytes())
             self.set_modified(sess, ep, True)
             self.write_manifest(sess)
             return self.episode(sess, ep)
@@ -400,16 +376,10 @@ class Store:
             path = sess.manual_path(ep)
             if payload.get("revision") != revision(read_bytes(path)):
                 raise APIError("此 episode 已被其他页面保存，请重新载入后再还原。", 409)
-            raw = sess.baseline.get(ep)
-            self.capture_initial(sess, ep)
-            if raw is None:
-                path.unlink(missing_ok=True)
-            else:
-                atomic_write(path, raw)
-            sess.revisions[ep] = revision(raw)
-            self.set_modified(sess, ep, False)
-            self.write_manifest(sess)
-            return self.episode(sess, ep)
+            # Return a draft only. The current file and revision remain unchanged.
+            current = self.episode(sess, ep)
+            return {**current, "points": current["baseline_points"],
+                    "annotated": current["baseline_annotated"], "restore_preview": True}
 
     def write_manifest(self, sess):
         dest = sess.path / "value_labels" / (sess.source_set or MANUAL_SET) / "manifest.json"
@@ -544,7 +514,7 @@ class Handler(BaseHTTPRequestHandler):
         try:
             path = unquote(urlparse(self.path).path)
             if self.command in ("GET", "HEAD") and path == "/api/datasets":
-                return self.json_response({"datasets": self.store.datasets(), "root": str(self.store.root), "annotation_ui_version": 3})
+                return self.json_response({"datasets": self.store.datasets(), "root": str(self.store.root), "annotation_ui_version": 4})
             if self.command == "GET" and path == "/api/inspect":
                 p = parse_qs(urlparse(self.path).query).get("path", [""])[0]
                 directory = Path(p).expanduser().resolve()

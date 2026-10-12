@@ -22,13 +22,13 @@ function categoryClass(value) { return value === 'fail' ? 'failure' : value; }
 function updateControls() {
   const changed = dirty();
   $('save').disabled = !state.ep || state.busy || !state.backendReady;
-  $('restore').disabled = !state.ep || state.busy;
+  $('restore').disabled = !state.ep || state.busy || !state.backendReady;
   $('openDataset').disabled = state.busy || !state.backendReady;
   $('progressInput').disabled = state.busy;
   $('deltaInput').disabled = state.busy;
   $('resetPoint').disabled = state.busy;
-  $('resetEpisode').disabled = !state.ep || state.busy;
-  $('confirmRestore').disabled = state.busy;
+  $('resetEpisode').disabled = !state.ep || state.busy || !state.backendReady;
+  $('confirmRestore').disabled = state.busy || !state.backendReady;
   renderAnchorControls();
   $('curve').style.pointerEvents = state.busy ? 'none' : '';
   $('dirtyStatus').textContent = state.busy ? '正在处理…' : changed ? '有未保存的修改' : state.ep?.modified ? '此轨迹已修改 · 已保存' : '此轨迹未修改 · 可直接保存确认';
@@ -48,11 +48,11 @@ function populateLabelSets(item) {
 async function init() {
   try {
     const value = await api('/api/datasets'); state.datasets = value.datasets;
-    state.backendReady = value.annotation_ui_version >= 3;
+    state.backendReady = value.annotation_ui_version >= 4;
     for (const item of value.datasets) { const option = document.createElement('option'); option.value = item.path; option.textContent = `${item.name} (${item.episodes})`; $('datasetSelect').append(option); }
     $('datasetPath').placeholder = `${value.root}/数据集目录`;
     if (!state.backendReady) {
-      $('datasetSummary').textContent = '请先重启标注服务，加载整条轨迹人工确认的保存规则';
+      $('datasetSummary').textContent = '请先重启标注服务，加载仅保存时写入标签的新规则';
       toast('界面已更新，请重启标注服务后刷新页面。', true);
     }
     updateControls();
@@ -416,18 +416,17 @@ async function save() {
   } catch (error) { toast(error.message, true); }
   finally { state.busy = false; updateControls(); }
 }
-$('restore').addEventListener('click', () => { if (state.ep && !state.busy) $('restoreDialog').showModal(); });
-$('resetEpisode').addEventListener('click', () => { if (state.ep && !state.busy) $('restoreDialog').showModal(); });
+$('restore').addEventListener('click', () => { if (state.ep && !state.busy && state.backendReady) $('restoreDialog').showModal(); });
+$('resetEpisode').addEventListener('click', () => { if (state.ep && !state.busy && state.backendReady) $('restoreDialog').showModal(); });
 $('cancelRestore').addEventListener('click', () => $('restoreDialog').close());
 $('confirmRestore').addEventListener('click', async () => {
-  if (state.busy) return;
+  if (state.busy || !state.backendReady) return;
   pause(); state.busy = true; updateControls();
   try {
-    const result = await api(route('/restore'), {revision: state.ep.revision}); acceptEpisode(result);
-    state.anchors = defaultAnchors(); persistAnchors();
+    const result = await api(route('/restore'), {revision: state.ep.revision});
+    state.points = [...result.points]; state.flags = [...result.annotated];
     $('restoreDialog').close(); renderTable(); renderChunkEditor(); draw();
-    $('sourceBadge').textContent = result.has_labels ? '已有 value 标签' : '0 → 1 线性初值';
-    toast('已恢复整条初值，此轨迹标记为未修改'); await refreshEpisodes();
+    toast('已恢复本次服务首次打开时的曲线；点击保存后才写入标签');
   } catch (error) { toast(error.message, true); }
   finally { state.busy = false; updateControls(); }
 });

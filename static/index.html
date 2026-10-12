@@ -88,7 +88,7 @@
     </main>
   </div>
   <div id="toast" role="status" aria-live="polite" hidden></div>
-  <dialog id="restoreDialog"><div class="dialog-icon">↺</div><h2>恢复整条初值？</h2><p>将曲线和标签文件恢复到此轨迹的初始状态，撤回已经保存的修改，并将轨迹标记为“未修改”。之后可以重新编辑或直接保存。</p><div class="dialog-actions"><button id="cancelRestore" class="button">取消</button><button id="confirmRestore" class="button danger">确认恢复整条初值</button></div></dialog>
+  <dialog id="restoreDialog"><div class="dialog-icon">↺</div><h2>恢复整条初值？</h2><p>将当前曲线恢复到本次服务启动后首次打开此轨迹时的状态。此操作仅修改页面草稿，点击保存才写入标签；不保存并重新打开时，仍显示最近保存的曲线。</p><div class="dialog-actions"><button id="cancelRestore" class="button">取消</button><button id="confirmRestore" class="button danger">确认恢复整条初值</button></div></dialog>
   <script src="/app.js"></script>
 </body>
 </html>
